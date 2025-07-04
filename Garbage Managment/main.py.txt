@@ -1,0 +1,87 @@
+import sqlite3
+from flask import Flask, request, jsonify, render_template
+
+app = Flask(_name_)
+DATABASE = 'garbage_management.db'
+
+def get_db_connection():
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row  # This allows accessing columns by name
+    return conn
+
+def init_db():
+    with app.app_context():
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS bins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bin_id TEXT NOT NULL UNIQUE,
+                location TEXT,
+                fill_level REAL,
+                status TEXT,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.commit()
+        conn.close()
+
+# Initialize the database when the app starts
+init_db()
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/update_bin_status', methods=['POST'])
+def update_bin_status():
+    data = request.json
+    bin_id = data.get('bin_id')
+    fill_level = data.get('fill_level')
+    status = data.get('status')
+    location = data.get('location', 'Unknown') # Optional: add location from bin
+
+    if not bin_id or fill_level is None or not status:
+        return jsonify({"error": "Missing data"}), 400
+
+    conn = get_db_connection()
+    try:
+        # Use INSERT OR REPLACE to update if bin_id exists, otherwise insert
+        conn.execute(
+            '''
+            INSERT INTO bins (bin_id, location, fill_level, status)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(bin_id) DO UPDATE SET
+                location = excluded.location,
+                fill_level = excluded.fill_level,
+                status = excluded.status,
+                last_updated = CURRENT_TIMESTAMP
+            ''',
+            (bin_id, location, fill_level, status)
+        )
+        conn.commit()
+        return jsonify({"message": "Bin status updated successfully"}), 200
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/get_all_bins', methods=['GET'])
+def get_all_bins():
+    conn = get_db_connection()
+    bins = conn.execute('SELECT * FROM bins').fetchall()
+    conn.close()
+    # Convert Row objects to dictionaries for jsonify
+    return jsonify([dict(b) for b in bins])
+
+@app.route('/get_full_bins', methods=['GET'])
+def get_full_bins():
+    conn = get_db_connection()
+    full_bins = conn.execute("SELECT * FROM bins WHERE status = 'Full'").fetchall()
+    conn.close()
+    return jsonify([dict(b) for b in full_bins])
+
+if _name_ == '_main_':
+    # You might want to run this with 'flask run' in production or a WSGI server
+    app.run(debug=True, host='0.0.0.0') # host='0.0.0.0' makes it accessible from other devices on the network
